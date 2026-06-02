@@ -16,3 +16,4 @@ wheels/
 tmp/
 
 .env
+data/
