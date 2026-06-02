@@ -1,0 +1,111 @@
+import os
+from pathlib import Path
+
+import dlt
+import polars as pl
+from dotenv import load_dotenv
+
+load_dotenv()
+
+os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = (
+    f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}"
+    f"@localhost:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
+)
+
+
+def process_file(file_path, category, pickup_col, dropoff_col, zones):
+    print(f"Extracting: {file_path.name}")
+
+    df = pl.scan_parquet(file_path)  # LazyFrame
+
+    df = df.rename(
+        {
+            pickup_col: "pickup_datetime",
+            dropoff_col: "dropoff_datetime",
+        },
+    ).with_columns(
+        pl.lit(category).alias("category"),
+        pl.col("PULocationID").cast(pl.Int64),
+        pl.col("DOLocationID").cast(pl.Int64),
+    )
+
+    df = df.with_columns(
+        pl.col("pickup_datetime").dt.date().alias("pickup_date"),
+        pl.col("pickup_datetime").dt.time().alias("pickup_time"),
+        pl.col("dropoff_datetime").dt.date().alias("dropoff_date"),
+        pl.col("dropoff_datetime").dt.time().alias("dropoff_time"),
+    ).drop(["pickup_datetime", "dropoff_datetime"])
+
+    df = (
+        df.join(
+            zones,
+            left_on="PULocationID",
+            right_on="LocationID",
+            how="left",
+        )
+        .rename({"ZoneName": "pickup_zone"})
+        .drop("PULocationID")
+    )
+
+    df = (
+        df.join(
+            zones,
+            left_on="DOLocationID",
+            right_on="LocationID",
+            how="left",
+        )
+        .rename({"ZoneName": "dropoff_zone"})
+        .drop("DOLocationID")
+    )
+
+    df_collected = df.collect(engine="streaming")
+
+    for batch in df_collected.iter_slices(n_rows=10000):  # ty:ignore[unresolved-attribute]
+        yield batch.to_arrow().to_pylist()  # eugh, ale równolegle i tak jest szybciej
+
+
+def get_taxi_resources():
+    data_dir = Path("./data")
+    zone_file = data_dir / "taxi_zone_lookup.csv"
+
+    zones_lazy = pl.scan_csv(zone_file).select(
+        pl.col("LocationID").cast(pl.Int64),
+        pl.col("Zone").alias("ZoneName"),
+    )
+
+    def create_resource(file_path, category, p_col, d_col):
+        @dlt.resource(name=file_path.stem, table_name="staging", write_disposition="append")
+        def resource_generator():
+            yield from process_file(file_path, category, p_col, d_col, zones_lazy)
+
+        return resource_generator()
+
+    return (
+        [create_resource(f, "yellow", "tpep_pickup_datetime", "tpep_dropoff_datetime") for f in data_dir.glob("yellow*.parquet")] +
+        [create_resource(f, "green", "lpep_pickup_datetime", "lpep_dropoff_datetime") for f in data_dir.glob("green*.parquet")] +
+        [create_resource(f, "fhvhv", "pickup_datetime", "dropoff_datetime") for f in data_dir.glob("fhvhv*.parquet")]
+    )  # fmt: skip
+
+
+def main():
+    pipeline = dlt.pipeline(
+        pipeline_name="taxi_pipeline",
+        destination="postgres",
+        dataset_name="raw",
+        progress="enlighten",
+    )
+
+    print("Extraction...")
+    pipeline.extract(get_taxi_resources(), workers=8)
+
+    print("Normalization...")
+    pipeline.normalize()
+
+    print("Loading to postgres...")
+    load_info = pipeline.load()
+
+    print(load_info)
+
+
+if __name__ == "__main__":
+    main()
