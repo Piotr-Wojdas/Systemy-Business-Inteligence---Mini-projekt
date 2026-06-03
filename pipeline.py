@@ -66,7 +66,7 @@ def process_file(file_path, category, pickup_col, dropoff_col, zones):
 
 def get_taxi_resources():
     data_dir = Path("./data")
-    zone_file = data_dir / "taxi_zone_lookup.csv"
+    zone_file = data_dir / "lookup/taxi_zone_lookup.csv"
 
     zones_lazy = pl.scan_csv(zone_file).select(
         pl.col("LocationID").cast(pl.Int64),
