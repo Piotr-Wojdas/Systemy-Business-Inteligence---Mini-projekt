@@ -1,0 +1,22 @@
+set dotenv-load
+
+default:
+    @echo "Commands:"
+    @echo ""
+    @just --list
+
+install:
+    uv venv && uv sync
+
+makeenv:
+    cp ./.env.example ./.env
+
+up:
+    docker compose up --build
+
+down:
+    docker compose down -v
+
+dlt-drop-pending:
+    uv run dlt pipeline taxi_pipeline drop-pending-packages
+    uv run dlt pipeline taxi_pipeline drop
