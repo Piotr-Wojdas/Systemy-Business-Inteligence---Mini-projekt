@@ -46,7 +46,7 @@ def load_lookup_map(path: Path, key_col: str, value_col: str, key_cast=None) -> 
     return result
 
 
-def process_file(
+def process_file(  # noqa: PLR0913
     file_path,
     category,
     pickup_col,
@@ -166,12 +166,12 @@ def process_file(
 
     if category == "fhvhv" and "hvfhs_license_num" in existing_columns:
         vendor_exprs.append(
-            pl.col("hvfhs_license_num").replace_strict(hvfhs_lookup).fill_null(pl.col("hvfhs_license_num"))
+            pl.col("hvfhs_license_num").replace_strict(hvfhs_lookup).fill_null(pl.col("hvfhs_license_num")),
         )
 
     if vendor_exprs:
         df = df.with_columns(pl.coalesce(vendor_exprs).alias("vendor")).drop(
-            [c for c in ["VendorID", "hvfhs_license_num"] if c in df.collect_schema().names()]
+            [c for c in ["VendorID", "hvfhs_license_num"] if c in df.collect_schema().names()],
         )
 
     df_collected = df.collect(engine="streaming")
