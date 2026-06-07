@@ -1,3 +1,4 @@
+import csv
 import os
 from pathlib import Path
 
@@ -25,11 +26,36 @@ COLUMNS_TO_DROP = [
     "request_datetime",
     "on_scene_datetime",
     "RatecodeID",
-    "hvfhs_license_num",
+    "trip_type",  # green only
+    # "hvfhs_license_num", # lift/uber etc
 ]
 
 
-def process_file(file_path, category, pickup_col, dropoff_col, zones):
+def load_lookup_map(path: Path, key_col: str, value_col: str, key_cast=None) -> dict:
+    with path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        reader.fieldnames = [name.strip() for name in reader.fieldnames or []]
+        result = {}
+        for row in reader:
+            clean_row = {(k.strip() if k else k): (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
+            key = clean_row[key_col]
+            value = clean_row[value_col]
+            if key_cast is not None:
+                key = key_cast(key)
+            result[key] = value
+    return result
+
+
+def process_file(
+    file_path,
+    category,
+    pickup_col,
+    dropoff_col,
+    zones,
+    payment_lookup,
+    vendor_lookup,
+    hvfhs_lookup,
+):
     print(f"Extracting: {file_path.name}")
 
     df: LazyFrame = pl.scan_parquet(file_path)  # LazyFrame
@@ -69,8 +95,8 @@ def process_file(file_path, category, pickup_col, dropoff_col, zones):
         conditions.append(pl.col("trip_distance") > 0)
 
     # improved_surcharge
-    if col_exists("improved_surcharge"):
-        conditions.append(pl.col("improved_surcharge") >= 0)
+    if col_exists("improvement_surcharge"):
+        conditions.append(pl.col("improvement_surcharge") >= 0)
 
     # congestion_surcharge
     if col_exists("congestion_surcharge"):
@@ -128,6 +154,26 @@ def process_file(file_path, category, pickup_col, dropoff_col, zones):
         .drop("DOLocationID")
     )
 
+    if category in ("yellow", "green") and "payment_type" in existing_columns:
+        df = df.with_columns(
+            pl.col("payment_type").replace_strict(payment_lookup).fill_null(pl.col("payment_type")),
+        )
+
+    vendor_exprs = []
+
+    if category in ("yellow", "green") and "VendorID" in existing_columns:
+        vendor_exprs.append(pl.col("VendorID").replace_strict(vendor_lookup).fill_null(pl.col("VendorID")))
+
+    if category == "fhvhv" and "hvfhs_license_num" in existing_columns:
+        vendor_exprs.append(
+            pl.col("hvfhs_license_num").replace_strict(hvfhs_lookup).fill_null(pl.col("hvfhs_license_num"))
+        )
+
+    if vendor_exprs:
+        df = df.with_columns(pl.coalesce(vendor_exprs).alias("vendor")).drop(
+            [c for c in ["VendorID", "hvfhs_license_num"] if c in df.collect_schema().names()]
+        )
+
     df_collected = df.collect(engine="streaming")
 
     for batch in df_collected.iter_slices(n_rows=10000):  # ty:ignore[unresolved-attribute]
@@ -138,15 +184,49 @@ def get_taxi_resources():
     data_dir = Path("./data")
     zone_file = data_dir / "lookup/taxi_zone_lookup.csv"
 
+    zone_file = data_dir / "lookup/taxi_zone_lookup.csv"
+    payment_file = data_dir / "lookup/paymenttype.csv"
+    vendor_file = data_dir / "lookup/vendorid.csv"
+
     zones_lazy = pl.scan_csv(zone_file).select(
         pl.col("LocationID").cast(pl.Int64),
         pl.col("Zone").alias("ZoneName"),
     )
 
+    payment_lookup = load_lookup_map(
+        payment_file,
+        "payment_type_code",
+        "payment_type_string",
+        key_cast=int,
+    )
+
+    vendor_lookup = load_lookup_map(
+        vendor_file,
+        "vendor_id_code",
+        "vendor_id",
+        key_cast=int,
+    )
+
+    hvfhs_lookup = {
+        "HV0002": "Juno",
+        "HV0003": "Uber",
+        "HV0004": "Via",
+        "HV0005": "Lyft",
+    }
+
     def create_resource(file_path, category, p_col, d_col):
         @dlt.resource(name=file_path.stem, table_name="staging", write_disposition="append")
         def resource_generator():
-            yield from process_file(file_path, category, p_col, d_col, zones_lazy)
+            yield from process_file(
+                file_path,
+                category,
+                p_col,
+                d_col,
+                zones_lazy,
+                payment_lookup,
+                vendor_lookup,
+                hvfhs_lookup,
+            )
 
         return resource_generator()
 
@@ -163,6 +243,7 @@ def main():
         destination="postgres",
         dataset_name="raw",
         progress="enlighten",
+        dev_mode=True,
         full_refresh=True,  # drop empty columns
     )
 
