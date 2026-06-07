@@ -4,6 +4,7 @@ from pathlib import Path
 import dlt
 import polars as pl
 from dotenv import load_dotenv
+from polars import LazyFrame
 
 load_dotenv()
 
@@ -12,11 +13,33 @@ os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = (
     f"@localhost:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
 )
 
+COLUMNS_TO_DROP = [
+    "store_and_fwd_flag",
+    "shared_request_flag",
+    "dispatching_base_num",
+    "originating_base_num",
+    "shared_match_flag",
+    "wav_request_flag",
+    "wav_match_flag",
+    "access_a_ride_flag",
+    "request_datetime",
+    "on_scene_datetime",
+    "RatecodeID",
+    "hvfhs_license_num",
+]
+
 
 def process_file(file_path, category, pickup_col, dropoff_col, zones):
     print(f"Extracting: {file_path.name}")
 
-    df = pl.scan_parquet(file_path)  # LazyFrame
+    df: LazyFrame = pl.scan_parquet(file_path)  # LazyFrame
+
+    existing_columns = set(df.collect_schema().names())
+
+    # remove columns
+    df = df.drop(
+        [col for col in COLUMNS_TO_DROP if col in existing_columns],
+    )
 
     df = df.rename(
         {
@@ -28,6 +51,9 @@ def process_file(file_path, category, pickup_col, dropoff_col, zones):
         pl.col("PULocationID").cast(pl.Int64),
         pl.col("DOLocationID").cast(pl.Int64),
     )
+
+    # drop incorrect pick-up/drop-of order
+    df = df.filter(pl.col("dropoff_datetime") >= pl.col("pickup_datetime"))
 
     df = df.with_columns(
         pl.col("pickup_datetime").dt.date().alias("pickup_date"),
@@ -93,6 +119,7 @@ def main():
         destination="postgres",
         dataset_name="raw",
         progress="enlighten",
+        full_refresh=True,  # drop empty columns
     )
 
     print("Extraction...")
