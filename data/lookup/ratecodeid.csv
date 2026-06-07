@@ -1,4 +1,4 @@
-rate-code-id,rate_code
+rate_code_id,rate_code_string
 1,Standard rate
 2,JFK
 3,Newark

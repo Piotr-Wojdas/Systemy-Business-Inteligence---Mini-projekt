@@ -1,4 +1,4 @@
-payment_type_code,payment_type
+payment_type_code,payment_type_string
 0,Flex Fare trip
 1,Credit card
 2,Cash
