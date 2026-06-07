@@ -27,6 +27,7 @@ COLUMNS_TO_DROP = [
     "on_scene_datetime",
     "RatecodeID",
     "trip_type",  # green only
+    "trip_time",  # only fhvhv, and includes arrival etc.
     # "hvfhs_license_num", # lift/uber etc
 ]
 
@@ -77,6 +78,11 @@ def process_file(  # noqa: PLR0913
         pl.col("PULocationID").cast(pl.Int64),
         pl.col("DOLocationID").cast(pl.Int64),
     )
+
+    if category == "fhvhv" and "trip_miles" in existing_columns:
+        df = df.rename({"trip_miles": "trip_distance"})
+
+    existing_columns = set(df.collect_schema().names())
 
     def col_exists(name: str) -> bool:
         return name in existing_columns
@@ -156,18 +162,24 @@ def process_file(  # noqa: PLR0913
 
     if category in ("yellow", "green") and "payment_type" in existing_columns:
         df = df.with_columns(
-            pl.col("payment_type").replace_strict(payment_lookup).fill_null(pl.col("payment_type")),
+            pl.col("payment_type").cast(pl.Utf8).replace(payment_lookup).alias("payment_type"),
         )
+
+    if category in ("yellow", "green") and "tip_amount" in existing_columns:
+        df = df.with_columns(
+            pl.when(pl.col("payment_type") == "Credit card").then(pl.col("tip_amount")).otherwise(None).alias("tips"),
+        ).drop("tip_amount")
+
+    if category == "fhvhv" and "tips_amount" in existing_columns:
+        df = df.rename({"tips_amount": "tips"})
 
     vendor_exprs = []
 
     if category in ("yellow", "green") and "VendorID" in existing_columns:
-        vendor_exprs.append(pl.col("VendorID").replace_strict(vendor_lookup).fill_null(pl.col("VendorID")))
+        vendor_exprs.append(pl.col("VendorID").cast(pl.Utf8).replace(vendor_lookup))
 
     if category == "fhvhv" and "hvfhs_license_num" in existing_columns:
-        vendor_exprs.append(
-            pl.col("hvfhs_license_num").replace_strict(hvfhs_lookup).fill_null(pl.col("hvfhs_license_num")),
-        )
+        vendor_exprs.append(pl.col("hvfhs_license_num").cast(pl.Utf8).replace(hvfhs_lookup))
 
     if vendor_exprs:
         df = df.with_columns(pl.coalesce(vendor_exprs).alias("vendor")).drop(
@@ -193,19 +205,25 @@ def get_taxi_resources():
         pl.col("Zone").alias("ZoneName"),
     )
 
-    payment_lookup = load_lookup_map(
-        payment_file,
-        "payment_type_code",
-        "payment_type_string",
-        key_cast=int,
-    )
+    payment_lookup = {
+        str(k): v
+        for k, v in load_lookup_map(
+            payment_file,
+            "payment_type_code",
+            "payment_type_string",
+            key_cast=int,
+        ).items()
+    }
 
-    vendor_lookup = load_lookup_map(
-        vendor_file,
-        "vendor_id_code",
-        "vendor_id",
-        key_cast=int,
-    )
+    vendor_lookup = {
+        str(k): v
+        for k, v in load_lookup_map(
+            vendor_file,
+            "vendor_id_code",
+            "vendor_id",
+            key_cast=int,
+        ).items()
+    }
 
     hvfhs_lookup = {
         "HV0002": "Juno",
@@ -215,7 +233,7 @@ def get_taxi_resources():
     }
 
     def create_resource(file_path, category, p_col, d_col):
-        @dlt.resource(name=file_path.stem, table_name="staging", write_disposition="append")
+        @dlt.resource(name=file_path.stem, table_name="imported", write_disposition="append")
         def resource_generator():
             yield from process_file(
                 file_path,
