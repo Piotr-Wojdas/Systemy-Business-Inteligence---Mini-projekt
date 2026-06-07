@@ -1,9 +1,7 @@
 set dotenv-load
 
 default:
-    @echo "Commands:"
-    @echo ""
-    @just --list
+    uv run pipeline.py
 
 install:
     uv venv && uv sync
