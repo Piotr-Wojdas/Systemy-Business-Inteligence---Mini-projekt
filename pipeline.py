@@ -52,8 +52,52 @@ def process_file(file_path, category, pickup_col, dropoff_col, zones):
         pl.col("DOLocationID").cast(pl.Int64),
     )
 
-    # drop incorrect pick-up/drop-of order
-    df = df.filter(pl.col("dropoff_datetime") >= pl.col("pickup_datetime"))
+    def col_exists(name: str) -> bool:
+        return name in existing_columns
+
+    conditions = []
+
+    # datetime sanity (always safe here)
+    conditions.append(pl.col("dropoff_datetime") >= pl.col("pickup_datetime"))
+
+    # passenger_count
+    if col_exists("passenger_count"):
+        conditions.append(pl.col("passenger_count") > 0)
+
+    # trip_distance
+    if col_exists("trip_distance"):
+        conditions.append(pl.col("trip_distance") > 0)
+
+    # improved_surcharge
+    if col_exists("improved_surcharge"):
+        conditions.append(pl.col("improved_surcharge") >= 0)
+
+    # congestion_surcharge
+    if col_exists("congestion_surcharge"):
+        conditions.append(pl.col("congestion_surcharge") != 0)
+
+    # cbd_congestion_fee
+    if col_exists("cbd_congestion_fee"):
+        conditions.append(pl.col("cbd_congestion_fee") != 0)
+
+    # total_amount
+    if col_exists("total_amount"):
+        conditions.append(pl.col("total_amount") > 0)
+
+    # mta_tax
+    if col_exists("mta_tax"):
+        conditions.append(pl.col("mta_tax") >= 0)
+
+    # payment_type
+    if col_exists("payment_type"):
+        conditions.append(~pl.col("payment_type").is_in([5, 6]))
+
+    # PULocationID / DOLocationID invalid zones
+    conditions.append(~pl.col("PULocationID").is_in([264, 265]))
+    conditions.append(~pl.col("DOLocationID").is_in([264, 265]))
+
+    # apply combined filter
+    df = df.filter(pl.reduce(lambda a, b: a & b, conditions))
 
     df = df.with_columns(
         pl.col("pickup_datetime").dt.date().alias("pickup_date"),
