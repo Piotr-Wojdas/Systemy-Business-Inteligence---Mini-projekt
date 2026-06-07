@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import dlt
+import holidays
 import polars as pl
 from dotenv import load_dotenv
 from polars import LazyFrame
@@ -56,6 +57,7 @@ def process_file(  # noqa: PLR0913
     payment_lookup,
     vendor_lookup,
     hvfhs_lookup,
+    dl_holidays,
 ):
     print(f"Extracting: {file_path.name}")
 
@@ -131,12 +133,20 @@ def process_file(  # noqa: PLR0913
     # apply combined filter
     df = df.filter(pl.reduce(lambda a, b: a & b, conditions))
 
-    df = df.with_columns(
-        pl.col("pickup_datetime").dt.date().alias("pickup_date"),
-        pl.col("pickup_datetime").dt.time().alias("pickup_time"),
-        pl.col("dropoff_datetime").dt.date().alias("dropoff_date"),
-        pl.col("dropoff_datetime").dt.time().alias("dropoff_time"),
-    ).drop(["pickup_datetime", "dropoff_datetime"])
+    df = (
+        df.with_columns(
+            pl.col("pickup_datetime").dt.date().alias("pickup_date"),
+            pl.col("pickup_datetime").dt.time().alias("pickup_time"),
+            pl.col("dropoff_datetime").dt.date().alias("dropoff_date"),
+            pl.col("dropoff_datetime").dt.time().alias("dropoff_time"),
+        )
+        .with_columns(
+            pl.col("pickup_date").dt.month().alias("month"),
+            pl.col("pickup_date").dt.strftime("%A").alias("day_of_week"),
+            pl.col("pickup_date").is_in(pl.Series(list(dl_holidays))).alias("is_holiday"),
+        )
+        .drop(["pickup_datetime", "dropoff_datetime"])
+    )
 
     df = (
         df.join(
@@ -232,6 +242,8 @@ def get_taxi_resources():
         "HV0005": "Lyft",
     }
 
+    dl_holidays = holidays.US(years=range(2015, 2026))
+
     def create_resource(file_path, category, p_col, d_col):
         @dlt.resource(name=file_path.stem, table_name="imported", write_disposition="append")
         def resource_generator():
@@ -244,6 +256,7 @@ def get_taxi_resources():
                 payment_lookup,
                 vendor_lookup,
                 hvfhs_lookup,
+                dl_holidays,
             )
 
         return resource_generator()
