@@ -1,6 +1,8 @@
 set dotenv-load
 
-default:
+default: run
+
+run:
     uv run pipeline.py
 
 install:
@@ -18,3 +20,5 @@ down:
 dlt-drop-pending:
     uv run dlt pipeline taxi_pipeline drop-pending-packages
     uv run dlt pipeline taxi_pipeline drop
+
+restart: down dlt-drop-pending up run
