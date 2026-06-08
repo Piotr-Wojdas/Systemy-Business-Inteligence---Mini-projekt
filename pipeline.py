@@ -48,7 +48,7 @@ def load_lookup_map(path: Path, key_col: str, value_col: str, key_cast=None) -> 
     return result
 
 
-def process_file(  # noqa: PLR0913
+def process_file(  # noqa: PLR0913, PLR0915
     file_path,
     category,
     pickup_col,
