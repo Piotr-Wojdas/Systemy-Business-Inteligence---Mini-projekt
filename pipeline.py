@@ -178,7 +178,7 @@ def process_file(  # noqa: PLR0913
     if category in ("yellow", "green") and "tip_amount" in existing_columns:
         df = df.with_columns(
             pl.when(pl.col("payment_type") == "Credit card").then(pl.col("tip_amount")).otherwise(None).alias("tips"),
-        ).drop("tip_amount")
+        )
 
     if category == "fhvhv" and "tips_amount" in existing_columns:
         df = df.rename({"tips_amount": "tips"})
@@ -194,6 +194,117 @@ def process_file(  # noqa: PLR0913
     if vendor_exprs:
         df = df.with_columns(pl.coalesce(vendor_exprs).alias("vendor")).drop(
             [c for c in ["VendorID", "hvfhs_license_num"] if c in df.collect_schema().names()],
+        )
+
+    if category == "yellow":
+        df = df.with_columns(
+            (pl.col("fare_amount").fill_null(0) + pl.col("extra").fill_null(0)).alias("base_fare"),
+            (
+                pl.col("tolls_amount").fill_null(0)
+                + pl.col("congestion_surcharge").fill_null(0)
+                + pl.col("cbd_congestion_fee").fill_null(0)
+                + pl.col("Airport_fee").fill_null(0)
+            ).alias("tolls_and_fees"),
+            (pl.col("mta_tax").fill_null(0) + pl.col("improvement_surcharge").fill_null(0)).alias("taxes"),
+            pl.col("tip_amount").alias("tips"),
+            pl.col("total_amount").alias("total_passenger_paid"),
+            (
+                pl.col("fare_amount").fill_null(0)
+                + pl.col("extra").fill_null(0)
+                + pl.col("tolls_amount").fill_null(0)
+                + pl.col("tip_amount").fill_null(0)
+            ).alias("driver_payout"),
+        ).drop(
+            [
+                c
+                for c in [
+                    "fare_amount",
+                    "extra",
+                    "tolls_amount",
+                    "congestion_surcharge",
+                    "cbd_congestion_fee",
+                    "Airport_fee",
+                    "mta_tax",
+                    "improvement_surcharge",
+                    "tip_amount",
+                    "total_amount",
+                ]
+                if c in df.collect_schema().names()
+            ],
+        )
+
+    if category == "green":
+        df = df.with_columns(
+            (pl.col("fare_amount").fill_null(0) + pl.col("extra").fill_null(0)).alias("base_fare"),
+            (
+                pl.col("tolls_amount").fill_null(0)
+                + pl.col("congestion_surcharge").fill_null(0)
+                + pl.col("cbd_congestion_fee").fill_null(0)
+            ).alias("tolls_and_fees"),
+            (pl.col("mta_tax").fill_null(0) + pl.col("improvement_surcharge").fill_null(0)).alias("taxes"),
+            pl.col("tip_amount").alias("tips"),
+            pl.col("total_amount").alias("total_passenger_paid"),
+            (
+                pl.col("fare_amount").fill_null(0)
+                + pl.col("extra").fill_null(0)
+                + pl.col("tolls_amount").fill_null(0)
+                + pl.col("tip_amount").fill_null(0)
+            ).alias("driver_payout"),
+        ).drop(
+            [
+                c
+                for c in [
+                    "fare_amount",
+                    "extra",
+                    "tolls_amount",
+                    "congestion_surcharge",
+                    "cbd_congestion_fee",
+                    "mta_tax",
+                    "improvement_surcharge",
+                    "tip_amount",
+                    "total_amount",
+                ]
+                if c in df.collect_schema().names()
+            ],
+        )
+
+    if category == "fhvhv":
+        df = df.with_columns(
+            pl.col("base_passenger_fare").fill_null(0).alias("base_fare"),
+            (
+                pl.col("tolls").fill_null(0)
+                + pl.col("congestion_surcharge").fill_null(0)
+                + pl.col("cbd_congestion_fee").fill_null(0)
+                + pl.col("airport_fee").fill_null(0)
+            ).alias("tolls_and_fees"),
+            (pl.col("sales_tax").fill_null(0) + pl.col("bcf").fill_null(0)).alias("taxes"),
+            (
+                pl.col("base_passenger_fare").fill_null(0)
+                + pl.col("tolls").fill_null(0)
+                + pl.col("congestion_surcharge").fill_null(0)
+                + pl.col("cbd_congestion_fee").fill_null(0)
+                + pl.col("airport_fee").fill_null(0)
+                + pl.col("sales_tax").fill_null(0)
+                + pl.col("bcf").fill_null(0)
+                + pl.col("tips").fill_null(0)
+            ).alias("total_passenger_paid"),
+            (pl.col("driver_pay").fill_null(0) + pl.col("tolls").fill_null(0) + pl.col("tips").fill_null(0)).alias(
+                "driver_payout"
+            ),
+        ).drop(
+            [
+                c
+                for c in [
+                    "base_passenger_fare",
+                    "tolls",
+                    "congestion_surcharge",
+                    "cbd_congestion_fee",
+                    "airport_fee",
+                    "sales_tax",
+                    "bcf",
+                ]
+                if c in df.collect_schema().names()
+            ],
         )
 
     df_collected = df.collect(engine="streaming")
@@ -242,7 +353,7 @@ def get_taxi_resources():
         "HV0005": "Lyft",
     }
 
-    dl_holidays = holidays.US(years=range(2015, 2026))
+    dl_holidays = holidays.US(years=range(2015, 2027))
 
     def create_resource(file_path, category, p_col, d_col):
         @dlt.resource(name=file_path.stem, table_name="imported", write_disposition="append")
