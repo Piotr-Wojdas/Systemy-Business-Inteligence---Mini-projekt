@@ -7,6 +7,9 @@ from tqdm import tqdm
 input_path = "data/lookup/taxi_zone_lookup.csv"
 output_path = "data/thirdparty/weather.csv"
 
+start_date = "2026-01-01"
+end_date = "2026-01-31"
+
 df_zones = pl.read_csv(input_path)
 
 df_zones = df_zones.select(["Zone", "Borough", "LocationID"])
@@ -64,8 +67,8 @@ for station_name, coords in tqdm(stations.items(), desc="Fetching data..."):
     params = {
         "latitude": coords["lat"],
         "longitude": coords["lon"],
-        "start_date": "2026-01-01",
-        "end_date": "2026-01-31",
+        "start_date": start_date,
+        "end_date": end_date,
         "hourly": "temperature_2m,precipitation,snowfall,weather_code",
         "temperature_unit": "fahrenheit",
         "precipitation_unit": "inch",
