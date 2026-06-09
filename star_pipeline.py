@@ -378,6 +378,12 @@ def reset_olap_schema() -> None:
         client.execute_sql('CREATE SCHEMA "olap";')
 
 
+def drop_schema(schema_name: str) -> None:
+    engine = create_engine(SQLALCHEMY_URL)
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS '{schema_name}' CASCADE;"))
+
+
 def main():
     source_schema = detect_latest_raw_schema()
     print(f"Using source schema: {source_schema}")
@@ -495,6 +501,8 @@ def main():
             fact_trip(),
         ],
     )
+
+    drop_schema(source_schema)  # remove raw_<number> big table
 
     print(load_info)
 

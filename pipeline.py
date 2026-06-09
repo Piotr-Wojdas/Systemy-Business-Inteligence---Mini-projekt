@@ -385,8 +385,8 @@ def main():
         destination="postgres",
         dataset_name="raw",
         progress="enlighten",
-        # dev_mode=True,
-        full_refresh=True,  # drop empty columns
+        dev_mode=True,
+        # full_refresh=True,  # drop empty columns
     )
 
     print("Extraction...")
