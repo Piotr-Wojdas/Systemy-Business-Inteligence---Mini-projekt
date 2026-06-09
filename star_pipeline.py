@@ -1,5 +1,6 @@
 import os
 from datetime import date, time, timedelta
+from pathlib import Path
 from typing import Any
 
 import dlt
@@ -17,11 +18,12 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB")
 
-
 PG_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@localhost:{POSTGRES_PORT}/{POSTGRES_DB}"
 SQLALCHEMY_URL = PG_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = PG_URL
+
+WEATHER_CSV = Path("data/thirdparty/weather.csv")
 
 olap_pipeline = dlt.pipeline(
     pipeline_name="taxi_star_schema",
@@ -51,7 +53,8 @@ def detect_latest_raw_schema() -> str:
         ).fetchone()
 
     if not row:
-        raise RuntimeError("Could not find table 'imported' in any schema starting with 'raw'.")
+        msg = "Could not find table 'imported' in any schema starting with 'raw'."
+        raise RuntimeError(msg)
 
     return row[0]
 
@@ -176,6 +179,62 @@ def build_dimension_maps(source_schema: str):
     }
 
 
+def build_weather_dimension():
+    if not WEATHER_CSV.exists():
+        msg = f"Weather file not found: {WEATHER_CSV}"
+        raise RuntimeError(msg)
+
+    weather_df = (
+        pl.read_csv(WEATHER_CSV, try_parse_dates=True)
+        .rename(
+            {
+                "Zone": "zone_name",
+                "date": "weather_date",
+                "hour": "weather_hour",
+                "temperature_f": "temperature_f",
+                "precipitation_inches": "precipitation_inches",
+                "snowfall_inches": "snowfall_inches",
+                "weather_status": "weather_status",
+            },
+        )
+        .with_columns(
+            [
+                pl.col("weather_date").cast(pl.Date),
+                pl.col("weather_hour").cast(pl.Int64),
+                pl.col("temperature_f").cast(pl.Float64),
+                ((pl.col("temperature_f") - 32) * 5 / 9).round(2).alias("temperature_c"),
+                pl.col("precipitation_inches").cast(pl.Float64),
+                pl.col("snowfall_inches").cast(pl.Float64),
+                pl.col("weather_status").cast(pl.Utf8),
+                pl.col("zone_name").cast(pl.Utf8),
+            ],
+        )
+        .unique(subset=["zone_name", "weather_date", "weather_hour"], keep="first")
+        .sort(["zone_name", "weather_date", "weather_hour"])
+        .with_row_index("weather_key", offset=1)
+        .select(
+            [
+                "weather_key",
+                "zone_name",
+                "weather_date",
+                "weather_hour",
+                "temperature_f",
+                "temperature_c",
+                "precipitation_inches",
+                "snowfall_inches",
+                "weather_status",
+            ],
+        )
+    )
+
+    weather_lookup = {
+        (row["zone_name"], row["weather_date"], row["weather_hour"]): row["weather_key"]
+        for row in weather_df.iter_rows(named=True)
+    }
+
+    return weather_df, weather_lookup
+
+
 def make_dim_date_table(min_date: date, max_date: date, holiday_set: set[date]) -> pl.DataFrame:
     rows = []
     cur = min_date
@@ -221,12 +280,13 @@ def make_dim_lookup_table(names: list[str], key_name: str, value_name: str) -> p
     )
 
 
-def make_fact_batch(
+def make_fact_batch(  # noqa: PLR0913
     df: pl.DataFrame,
     dim_zone_map: dict[str, int],
     dim_vendor_map: dict[str, int],
     dim_payment_map: dict[str, int],
     dim_category_map: dict[str, int],
+    weather_lookup: dict[tuple[str, date, int], int],
 ) -> pl.DataFrame:
     pickup_dt = pl.datetime(
         pl.col("pickup_date").dt.year(),
@@ -272,6 +332,18 @@ def make_fact_batch(
             pl.col("vendor").cast(pl.Utf8).replace(dim_vendor_map).cast(pl.Int64).alias("vendor_key"),
             pl.col("payment_type").cast(pl.Utf8).replace(dim_payment_map).cast(pl.Int64).alias("payment_type_key"),
             pl.col("category").cast(pl.Utf8).replace(dim_category_map).cast(pl.Int64).alias("category_key"),
+            pl.struct(["pickup_zone", "pickup_date", "pickup_time"])
+            .map_elements(
+                lambda x: weather_lookup.get(
+                    (
+                        str(x["pickup_zone"]),
+                        x["pickup_date"],
+                        int(x["pickup_time"].hour),
+                    ),
+                ),
+                return_dtype=pl.Int64,
+            )
+            .alias("weather_key"),
             (dropoff_dt - pickup_dt).dt.total_seconds().cast(pl.Int64).alias("trip_duration_seconds"),
         ],
     ).select(
@@ -285,6 +357,7 @@ def make_fact_batch(
             "vendor_key",
             "payment_type_key",
             "category_key",
+            "weather_key",
             "passenger_count",
             "trip_distance",
             "tips",
@@ -301,8 +374,8 @@ def make_fact_batch(
 
 def reset_olap_schema() -> None:
     with olap_pipeline.sql_client() as client:
-        client.execute_sql(f'DROP SCHEMA IF EXISTS "{OLAP_SCHEMA}" CASCADE;')
-        client.execute_sql(f'CREATE SCHEMA "{OLAP_SCHEMA}";')
+        client.execute_sql('DROP SCHEMA IF EXISTS "olap" CASCADE;')
+        client.execute_sql('CREATE SCHEMA "olap";')
 
 
 def main():
@@ -310,6 +383,7 @@ def main():
     print(f"Using source schema: {source_schema}")
 
     dims = build_dimension_maps(source_schema)
+    weather_df, weather_lookup = build_weather_dimension()
 
     min_date = dims["min_date"]
     max_date = dims["max_date"]
@@ -350,6 +424,10 @@ def main():
     @dlt.resource(name="dim_category", write_disposition="replace")
     def dim_category():
         yield dim_category_df.to_arrow()
+
+    @dlt.resource(name="dim_weather", write_disposition="replace")
+    def dim_weather():
+        yield weather_df.to_arrow()
 
     @dlt.resource(name="fact_trip", write_disposition="replace")
     def fact_trip():
@@ -397,10 +475,12 @@ def main():
                 dim_vendor_map=dim_vendor_map,
                 dim_payment_map=dim_payment_map,
                 dim_category_map=dim_category_map,
+                weather_lookup=weather_lookup,
             )
 
             yield fact_df.to_arrow()
 
+    _ = olap_pipeline.drop()
     reset_olap_schema()
 
     load_info = olap_pipeline.run(
@@ -411,6 +491,7 @@ def main():
             dim_vendor(),
             dim_payment_type(),
             dim_category(),
+            dim_weather(),
             fact_trip(),
         ],
     )
