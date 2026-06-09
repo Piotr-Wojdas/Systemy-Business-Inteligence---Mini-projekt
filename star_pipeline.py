@@ -381,7 +381,7 @@ def reset_olap_schema() -> None:
 def drop_schema(schema_name: str) -> None:
     engine = create_engine(SQLALCHEMY_URL)
     with engine.begin() as conn:
-        conn.execute(text(f"DROP SCHEMA IF EXISTS '{schema_name}' CASCADE;"))
+        conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE;'))
 
 
 def main():
@@ -486,8 +486,9 @@ def main():
 
             yield fact_df.to_arrow()
 
-    _ = olap_pipeline.drop()
-    reset_olap_schema()
+    # remove dropping olap schema
+    # _ = olap_pipeline.drop()
+    # reset_olap_schema()
 
     load_info = olap_pipeline.run(
         [
