@@ -1,0 +1,184 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\solem\\source\\repos\\Taxi\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Cube.cube||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Taxi Cube.cube||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Date.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Date.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Time.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Time.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Category.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Category.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Weather.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Weather.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Zone.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Zone.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Vendor.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Vendor.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Payment Type.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Dim Payment Type.dim||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star.dsv||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Taxi Star.dsv||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star 1.dsv||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design",
+      "RelativeMoniker": "D:0:0:{7C3DDBEF-D31C-F147-E6AB-E49A5AD176E2}|Taxi\\Taxi.dwproj|solutionrelative:Taxi\\Taxi Star 1.dsv||{B4191D15-2D32-45F2-906F-E91BBAAA6059}|Design"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 1,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{aa2115a1-9712-457b-9047-dbb71ca2cdd2}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Taxi Cube.cube [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Cube.cube",
+              "RelativeDocumentMoniker": "Taxi\\Taxi Cube.cube",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Cube.cube [Design]",
+              "RelativeToolTip": "Taxi\\Taxi Cube.cube [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T21:06:16.541Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "Dim Zone.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Zone.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Zone.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Zone.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Zone.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:58:11.697Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "Dim Weather.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Weather.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Weather.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Weather.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Weather.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:57:59.49Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "Dim Vendor.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Vendor.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Vendor.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Vendor.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Vendor.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:57:48.107Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "Dim Time.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Time.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Time.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Time.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Time.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:57:34.398Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Dim Category.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Category.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Category.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Category.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Category.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:56:55.539Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Dim Date.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Date.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Date.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Date.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Date.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:57:10.436Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 7,
+              "Title": "Dim Payment Type.dim [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Payment Type.dim",
+              "RelativeDocumentMoniker": "Taxi\\Dim Payment Type.dim",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Dim Payment Type.dim [Design]",
+              "RelativeToolTip": "Taxi\\Dim Payment Type.dim [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:57:23.313Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 9,
+              "Title": "Taxi Star 1.dsv [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star 1.dsv",
+              "RelativeDocumentMoniker": "Taxi\\Taxi Star 1.dsv",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star 1.dsv [Design]",
+              "RelativeToolTip": "Taxi\\Taxi Star 1.dsv [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:50:50.256Z",
+              "EditorCaption": " [Design]"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 8,
+              "Title": "Taxi Star.dsv [Design]",
+              "DocumentMoniker": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star.dsv",
+              "RelativeDocumentMoniker": "Taxi\\Taxi Star.dsv",
+              "ToolTip": "C:\\Users\\solem\\source\\repos\\Taxi\\Taxi\\Taxi Star.dsv [Design]",
+              "RelativeToolTip": "Taxi\\Taxi Star.dsv [Design]",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-06-09T20:41:06.957Z",
+              "EditorCaption": " [Design]"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
