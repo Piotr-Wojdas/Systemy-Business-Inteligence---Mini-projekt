@@ -17,4 +17,5 @@ tmp/
 
 .env
 data/*.parquet
+data/*.parquet*
 scratches/
