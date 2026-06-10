@@ -14,7 +14,7 @@ def migrate_pg_to_mssql():
     )
 
     mssql_url = (
-        f"mssql://sa:{os.getenv('MSSQL_SA_PASSWORD')}@localhost:{os.getenv('MSSQL_PORT', '1433')}/master"
+        f"mssql://sa:{os.getenv('MSSQL_SA_PASSWORD')}@localhost:{os.getenv('MSSQL_PORT', '1433')}/etl"  # CRETE DATABASE etl
         f"?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes&Encrypt=yes"
     )
 
