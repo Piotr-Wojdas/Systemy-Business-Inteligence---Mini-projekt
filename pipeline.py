@@ -8,6 +8,12 @@ import polars as pl
 from dotenv import load_dotenv
 from polars import LazyFrame
 
+DATA_DIR = Path("./data/main_2026-01")
+LOG_DIR = Path("./logs")
+SUMMARY_LOG_FILE = LOG_DIR / "etl_summary.log"
+REJECTION_LOG_FILE = LOG_DIR / "rejected_rows.log"
+VALIDATION_LOG_FILE = LOG_DIR / "etl_validation.log"
+
 load_dotenv()
 
 os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = (
@@ -31,6 +37,16 @@ COLUMNS_TO_DROP = [
     "trip_time",  # only fhvhv, and includes arrival etc.
     # "hvfhs_license_num", # lift/uber etc
 ]
+
+
+def append_log_line(path: Path, line: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line.rstrip("\n") + "\n")
+
+
+def count_rows(frame: LazyFrame) -> int:
+    return frame.select(pl.len()).collect(engine="streaming").item()
 
 
 def load_lookup_map(path: Path, key_col: str, value_col: str, key_cast=None) -> dict:
@@ -61,7 +77,11 @@ def process_file(  # noqa: PLR0913, PLR0915
 ):
     print(f"Extracting: {file_path.name}")
 
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
     df: LazyFrame = pl.scan_parquet(file_path)  # LazyFrame
+
+    input_count = count_rows(df)
 
     existing_columns = set(df.collect_schema().names())
 
@@ -89,49 +109,111 @@ def process_file(  # noqa: PLR0913, PLR0915
     def col_exists(name: str) -> bool:
         return name in existing_columns
 
-    conditions = []
+    # ------------------------------------------------------------------
+    # DATA QUALITY RULES + REJECTION LOGGING
+    # ------------------------------------------------------------------
+    rules = []
 
     # datetime sanity (always safe here)
-    conditions.append(pl.col("dropoff_datetime") >= pl.col("pickup_datetime"))
+    rules.append(("invalid_datetime", pl.col("dropoff_datetime") >= pl.col("pickup_datetime")))
 
     # passenger_count
     if col_exists("passenger_count"):
-        conditions.append(pl.col("passenger_count") > 0)
+        rules.append(("invalid_passenger_count", pl.col("passenger_count") > 0))
 
     # trip_distance
     if col_exists("trip_distance"):
-        conditions.append(pl.col("trip_distance") > 0)
+        rules.append(("invalid_trip_distance", pl.col("trip_distance") > 0))
 
     # improved_surcharge
     if col_exists("improvement_surcharge"):
-        conditions.append(pl.col("improvement_surcharge") >= 0)
+        rules.append(("invalid_improvement_surcharge", pl.col("improvement_surcharge") >= 0))
 
     # congestion_surcharge
     if col_exists("congestion_surcharge"):
-        conditions.append(pl.col("congestion_surcharge") != 0)
+        rules.append(("invalid_congestion_surcharge", pl.col("congestion_surcharge") != 0))
 
     # cbd_congestion_fee
     if col_exists("cbd_congestion_fee"):
-        conditions.append(pl.col("cbd_congestion_fee") != 0)
+        rules.append(("invalid_cbd_congestion_fee", pl.col("cbd_congestion_fee") != 0))
 
     # total_amount
     if col_exists("total_amount"):
-        conditions.append(pl.col("total_amount") > 0)
+        rules.append(("invalid_total_amount", pl.col("total_amount") > 0))
 
     # mta_tax
     if col_exists("mta_tax"):
-        conditions.append(pl.col("mta_tax") >= 0)
+        rules.append(("invalid_mta_tax", pl.col("mta_tax") >= 0))
 
     # payment_type
     if col_exists("payment_type"):
-        conditions.append(~pl.col("payment_type").is_in([5, 6]))
+        rules.append(("invalid_payment_type", ~pl.col("payment_type").is_in([5, 6])))
 
     # PULocationID / DOLocationID invalid zones
-    conditions.append(~pl.col("PULocationID").is_in([264, 265]))
-    conditions.append(~pl.col("DOLocationID").is_in([264, 265]))
+    rules.append(("invalid_pickup_zone_id", ~pl.col("PULocationID").is_in([264, 265])))
+    rules.append(("invalid_dropoff_zone_id", ~pl.col("DOLocationID").is_in([264, 265])))
+
+    rejection_sample_columns = [
+        "pickup_datetime",
+        "dropoff_datetime",
+        "PULocationID",
+        "DOLocationID",
+        "passenger_count",
+        "trip_distance",
+        "improvement_surcharge",
+        "congestion_surcharge",
+        "cbd_congestion_fee",
+        "total_amount",
+        "mta_tax",
+        "payment_type",
+        "VendorID",
+        "hvfhs_license_num",
+        "fare_amount",
+        "extra",
+        "tolls_amount",
+        "tip_amount",
+        "base_passenger_fare",
+        "tolls",
+        "sales_tax",
+        "bcf",
+        "driver_pay",
+        "tips_amount",
+    ]
+    rejection_sample_columns = [c for c in rejection_sample_columns if c in existing_columns]
+
+    total_rejected_rows = 0
+
+    for rule_name, rule_expr in rules:
+        rejected_lf = df.filter(~rule_expr)
+        rejected_count = count_rows(rejected_lf)
+
+        if rejected_count > 0:
+            total_rejected_rows += rejected_count
+            append_log_line(
+                REJECTION_LOG_FILE,
+                f"{file_path.name};{rule_name};count={rejected_count}",
+            )
+
+            rejected_sample = rejected_lf.select(rejection_sample_columns).limit(5).collect(engine="streaming")
+            for row in rejected_sample.iter_rows(named=True):  # ty:ignore[unresolved-attribute]
+                append_log_line(
+                    REJECTION_LOG_FILE,
+                    f"{file_path.name};{rule_name};sample={row}",
+                )
 
     # apply combined filter
-    df = df.filter(pl.reduce(lambda a, b: a & b, conditions))
+    df = df.filter(pl.reduce(lambda a, b: a & b, [expr for _, expr in rules]))
+
+    filtered_count = count_rows(df)
+
+    append_log_line(
+        SUMMARY_LOG_FILE,
+        f"{file_path.name};input={input_count};filtered={filtered_count};removed={input_count - filtered_count}",
+    )
+
+    assert filtered_count <= input_count, (
+        f"{file_path.name}: filtered count is greater than input count ({filtered_count} > {input_count})"
+    )
 
     df = (
         df.with_columns(
@@ -146,6 +228,21 @@ def process_file(  # noqa: PLR0913, PLR0915
             pl.col("pickup_date").is_in(pl.Series(list(dl_holidays))).alias("is_holiday"),
         )
         .drop(["pickup_datetime", "dropoff_datetime"])
+    )
+
+    expected_temporal_columns = {
+        "pickup_date",
+        "pickup_time",
+        "dropoff_date",
+        "dropoff_time",
+        "month",
+        "day_of_week",
+        "is_holiday",
+    }
+    current_schema = set(df.collect_schema().names())
+    missing_temporal_columns = expected_temporal_columns - current_schema
+    assert not missing_temporal_columns, (
+        f"{file_path.name}: missing expected temporal columns: {sorted(missing_temporal_columns)}"
     )
 
     df = (
@@ -170,9 +267,23 @@ def process_file(  # noqa: PLR0913, PLR0915
         .drop("DOLocationID")
     )
 
+    pickup_zone_nulls = df.select(pl.col("pickup_zone").is_null().sum()).collect(engine="streaming").item()
+    dropoff_zone_nulls = df.select(pl.col("dropoff_zone").is_null().sum()).collect(engine="streaming").item()
+
+    append_log_line(
+        VALIDATION_LOG_FILE,
+        f"{file_path.name};pickup_zone_nulls={pickup_zone_nulls};dropoff_zone_nulls={dropoff_zone_nulls}",
+    )
+
     if category in ("yellow", "green") and "payment_type" in existing_columns:
         df = df.with_columns(
             pl.col("payment_type").cast(pl.Utf8).replace(payment_lookup).alias("payment_type"),
+        )
+
+        payment_type_nulls = df.select(pl.col("payment_type").is_null().sum()).collect(engine="streaming").item()
+        append_log_line(
+            VALIDATION_LOG_FILE,
+            f"{file_path.name};payment_type_nulls={payment_type_nulls}",
         )
 
     if category in ("yellow", "green") and "tip_amount" in existing_columns:
@@ -194,6 +305,12 @@ def process_file(  # noqa: PLR0913, PLR0915
     if vendor_exprs:
         df = df.with_columns(pl.coalesce(vendor_exprs).alias("vendor")).drop(
             [c for c in ["VendorID", "hvfhs_license_num"] if c in df.collect_schema().names()],
+        )
+
+        vendor_nulls = df.select(pl.col("vendor").is_null().sum()).collect(engine="streaming").item()
+        append_log_line(
+            VALIDATION_LOG_FILE,
+            f"{file_path.name};vendor_nulls={vendor_nulls}",
         )
 
     if category == "yellow":
@@ -289,7 +406,7 @@ def process_file(  # noqa: PLR0913, PLR0915
                 + pl.col("tips").fill_null(0)
             ).alias("total_passenger_paid"),
             (pl.col("driver_pay").fill_null(0) + pl.col("tolls").fill_null(0) + pl.col("tips").fill_null(0)).alias(
-                "driver_payout"
+                "driver_payout",
             ),
         ).drop(
             [
@@ -307,7 +424,25 @@ def process_file(  # noqa: PLR0913, PLR0915
             ],
         )
 
+    final_schema = set(df.collect_schema().names())
+    if "pickup_zone" in final_schema and "dropoff_zone" in final_schema:
+        zone_validation_count = (
+            df.select(
+                (pl.col("pickup_zone").is_null() | pl.col("dropoff_zone").is_null()).sum(),
+            )
+            .collect(engine="streaming")
+            .item()
+        )
+        append_log_line(
+            VALIDATION_LOG_FILE,
+            f"{file_path.name};zone_validation_null_rows={zone_validation_count}",
+        )
+
     df_collected = df.collect(engine="streaming")
+
+    assert df_collected.height == filtered_count, (
+        f"{file_path.name}: row count changed after transformations ({df_collected.height} != {filtered_count})"
+    )
 
     for batch in df_collected.iter_slices(n_rows=10000):  # ty:ignore[unresolved-attribute]
         yield batch.to_arrow().to_pylist()  # eugh, ale równolegle i tak jest szybciej
