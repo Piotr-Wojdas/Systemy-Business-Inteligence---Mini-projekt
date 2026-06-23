@@ -10,7 +10,7 @@ import numpy as np
 import polars as pl
 from polars import DataFrame
 
-FILE_PATH = "data/_full_fhvhv_tripdata_2026-01.parquet"
+FILE_PATH = "data/main_2026-02/_full_fhvhv_tripdata_2026-02.parquet"
 TARGET_ROWS = 5_000_000
 
 

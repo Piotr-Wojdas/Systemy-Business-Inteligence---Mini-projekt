@@ -13,7 +13,6 @@ from sqlalchemy import create_engine, text
 
 load_dotenv()
 
-# it doesnt work normally for some reason, idk
 POSTGRES_USER = os.getenv("POSTGRES_USER")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
@@ -30,11 +29,38 @@ SUMMARY_LOG_FILE = LOG_DIR / "olap_summary.log"
 VALIDATION_LOG_FILE = LOG_DIR / "olap_validation.log"
 
 olap_pipeline = dlt.pipeline(
-    pipeline_name="taxi_star_schema",
+    pipeline_name="taxi_star_schema_increment",
     destination="postgres",
     dataset_name="olap",
     progress="enlighten",
 )
+
+FACT_COLUMNS = [
+    "pickup_date_key",
+    "dropoff_date_key",
+    "pickup_time_key",
+    "dropoff_time_key",
+    "pickup_zone_key",
+    "dropoff_zone_key",
+    "vendor_key",
+    "payment_type_key",
+    "category_key",
+    "weather_key",
+    "passenger_count",
+    "trip_distance",
+    "tips",
+    "base_fare",
+    "tolls_and_fees",
+    "taxes",
+    "total_passenger_paid",
+    "driver_payout",
+    "driver_pay",
+    "trip_duration_seconds",
+]
+
+# Exact-row dedupe key for merge loading.
+# Compound keys are allowed by dlt.
+FACT_PRIMARY_KEY = FACT_COLUMNS.copy()
 
 
 def append_log_line(path: Path, line: str) -> None:
@@ -109,6 +135,24 @@ def norm_time(v: Any) -> time | None:
         return None
 
 
+def read_olap_table_df(table_name: str) -> pl.DataFrame:
+    try:
+        batches: list[pl.DataFrame] = []
+        source = sql_table(
+            credentials=PG_URL,
+            schema="olap",
+            table=table_name,
+            backend="pyarrow",
+            chunk_size=20000,
+            reflection_level="full",
+        )
+        for batch in source:
+            batches.append(pl.from_arrow(batch))
+        return pl.concat(batches, how="vertical") if batches else pl.DataFrame()
+    except Exception:  # noqa: BLE001
+        return pl.DataFrame()
+
+
 def raw_source_relation(source_schema: str):
     return sql_table(
         credentials=PG_URL,
@@ -130,7 +174,7 @@ def count_nulls(df: pl.DataFrame, column: str) -> int:
     return df.select(pl.col(column).is_null().sum()).item()
 
 
-def build_dimension_maps(source_schema: str):
+def collect_source_uniques(source_schema: str):
     min_date = None
     max_date = None
 
@@ -230,22 +274,136 @@ def build_dimension_maps(source_schema: str):
     category_list = sorted(unique_categories)
     time_list = sorted(unique_times, key=lambda t: (t.hour, t.minute, t.second))
 
-    holiday_set = holidays.US(years=range(min_date.year, max_date.year + 1))
-
     return {
         "min_date": min_date,
         "max_date": max_date,
-        "holiday_set": holiday_set,
         "zone_list": zone_list,
         "vendor_list": vendor_list,
         "payment_type_list": payment_type_list,
         "category_list": category_list,
         "time_list": time_list,
-        "dim_zone_map": {name: idx + 1 for idx, name in enumerate(zone_list)},
-        "dim_vendor_map": {name: idx + 1 for idx, name in enumerate(vendor_list)},
-        "dim_payment_map": {name: idx + 1 for idx, name in enumerate(payment_type_list)},
-        "dim_category_map": {name: idx + 1 for idx, name in enumerate(category_list)},
+        "holiday_set": holidays.US(years=range(min_date.year, max_date.year + 1)),
     }
+
+
+def build_static_lookup_state(
+    existing_df: pl.DataFrame,
+    key_col: str,
+    value_col: str,
+) -> tuple[dict[str, int], int]:
+    mapping: dict[str, int] = {}
+    max_key = 0
+
+    if existing_df.is_empty():
+        return mapping, max_key
+
+    for row in existing_df.select([key_col, value_col]).iter_rows(named=True):
+        if row[key_col] is None or row[value_col] is None:
+            continue
+        key = int(row[key_col])
+        value = str(row[value_col])
+        mapping[value] = key
+        max_key = max(max_key, key)
+
+    return mapping, max_key
+
+
+def build_time_lookup_state(existing_df: pl.DataFrame) -> set[time]:
+    if existing_df.is_empty():
+        return set()
+    return set(existing_df.get_column("full_time").drop_nulls().to_list())
+
+
+def build_date_lookup_state(existing_df: pl.DataFrame) -> set[date]:
+    if existing_df.is_empty():
+        return set()
+    return set(existing_df.get_column("full_date").drop_nulls().to_list())
+
+
+def build_weather_lookup_state(existing_df: pl.DataFrame) -> tuple[dict[tuple[str, date, int], int], int]:
+    mapping: dict[tuple[str, date, int], int] = {}
+    max_key = 0
+
+    if existing_df.is_empty():
+        return mapping, max_key
+
+    for row in existing_df.select(
+        ["weather_key", "zone_name", "weather_date", "weather_hour"],
+    ).iter_rows(named=True):
+        if row["weather_key"] is None:
+            continue
+        key = (
+            str(row["zone_name"]),
+            norm_date(row["weather_date"]),
+            int(row["weather_hour"]),
+        )
+        if key[1] is None:
+            continue
+        mapping[key] = int(row["weather_key"])
+        max_key = max(max_key, int(row["weather_key"]))
+
+    return mapping, max_key
+
+
+def build_incremental_lookup_df(
+    source_values: set[str],
+    existing_map: dict[str, int],
+    key_name: str,
+    value_name: str,
+) -> tuple[pl.DataFrame, dict[str, int]]:
+    missing = sorted(v for v in source_values if v not in existing_map)
+    next_key = max(existing_map.values(), default=0)
+
+    rows = []
+    updated_map = dict(existing_map)
+    for idx, value in enumerate(missing, start=1):
+        key = next_key + idx
+        rows.append({key_name: key, value_name: value})
+        updated_map[value] = key
+
+    return pl.DataFrame(rows), updated_map
+
+
+def build_dim_date_rows(
+    min_date: date, max_date: date, existing_dates: set[date], holiday_set: set[date]
+) -> pl.DataFrame:
+    rows = []
+    cur = min_date
+    while cur <= max_date:
+        if cur not in existing_dates:
+            rows.append(
+                {
+                    "date_key": date_key(cur),
+                    "full_date": cur,
+                    "year": cur.year,
+                    "quarter": (cur.month - 1) // 3 + 1,
+                    "month": cur.month,
+                    "month_name": cur.strftime("%B"),
+                    "day_of_month": cur.day,
+                    "day_of_week": cur.isoweekday(),
+                    "day_of_week_name": cur.strftime("%A"),
+                    "is_weekend": cur.isoweekday() in (6, 7),
+                    "is_holiday": cur in holiday_set,
+                },
+            )
+        cur += timedelta(days=1)
+    return pl.DataFrame(rows)
+
+
+def build_dim_time_rows(time_list: list[time], existing_times: set[time]) -> pl.DataFrame:
+    missing_times = [
+        t for t in sorted(time_list, key=lambda t: (t.hour, t.minute, t.second)) if t not in existing_times
+    ]
+    return pl.DataFrame(
+        {
+            "time_key": [time_key(t) for t in missing_times],
+            "full_time": missing_times,
+            "hour": [t.hour for t in missing_times],
+            "minute": [t.minute for t in missing_times],
+            "second": [t.second for t in missing_times],
+            "part_of_day": [part_of_day(t) for t in missing_times],
+        },
+    )
 
 
 def build_weather_dimension():
@@ -280,10 +438,8 @@ def build_weather_dimension():
         )
         .unique(subset=["zone_name", "weather_date", "weather_hour"], keep="first")
         .sort(["zone_name", "weather_date", "weather_hour"])
-        .with_row_index("weather_key", offset=1)
         .select(
             [
-                "weather_key",
                 "zone_name",
                 "weather_date",
                 "weather_hour",
@@ -296,173 +452,79 @@ def build_weather_dimension():
         )
     )
 
-    weather_lookup = {
-        (row["zone_name"], row["weather_date"], row["weather_hour"]): row["weather_key"]
-        for row in weather_df.iter_rows(named=True)
-    }
-
-    append_log_line(
-        VALIDATION_LOG_FILE,
-        (
-            f"weather;rows={weather_df.height};"
-            f"zones={weather_df.select(pl.col('zone_name').n_unique()).item()};"
-            f"dates={weather_df.select(pl.col('weather_date').n_unique()).item()};"
-            f"hours={weather_df.select(pl.col('weather_hour').n_unique()).item()}"
-        ),
-    )
-
-    return weather_df, weather_lookup
+    return weather_df
 
 
-def make_dim_date_table(min_date: date, max_date: date, holiday_set: set[date]) -> pl.DataFrame:
+def build_incremental_weather_rows(
+    weather_df: pl.DataFrame,
+    existing_weather_map: dict[tuple[str, date, int], int],
+) -> tuple[pl.DataFrame, dict[tuple[str, date, int], int]]:
+    next_key = max(existing_weather_map.values(), default=0)
     rows = []
-    cur = min_date
-    while cur <= max_date:
+    updated_map = dict(existing_weather_map)
+
+    for row in weather_df.iter_rows(named=True):
+        nat_key = (str(row["zone_name"]), row["weather_date"], int(row["weather_hour"]))
+        if nat_key in updated_map:
+            continue
+        next_key += 1
+        updated_map[nat_key] = next_key
         rows.append(
             {
-                "date_key": date_key(cur),
-                "full_date": cur,
-                "year": cur.year,
-                "quarter": (cur.month - 1) // 3 + 1,
-                "month": cur.month,
-                "month_name": cur.strftime("%B"),
-                "day_of_month": cur.day,
-                "day_of_week": cur.isoweekday(),
-                "day_of_week_name": cur.strftime("%A"),
-                "is_weekend": cur.isoweekday() in (6, 7),
-                "is_holiday": cur in holiday_set,
+                "weather_key": next_key,
+                "zone_name": row["zone_name"],
+                "weather_date": row["weather_date"],
+                "weather_hour": int(row["weather_hour"]),
+                "temperature_f": row["temperature_f"],
+                "temperature_c": row["temperature_c"],
+                "precipitation_inches": row["precipitation_inches"],
+                "snowfall_inches": row["snowfall_inches"],
+                "weather_status": row["weather_status"],
             },
         )
-        cur += timedelta(days=1)
-    return pl.DataFrame(rows)
 
-
-def make_dim_time_table(time_list: list[time]) -> pl.DataFrame:
-    return pl.DataFrame(
-        {
-            "time_key": [time_key(t) for t in time_list],
-            "full_time": time_list,
-            "hour": [t.hour for t in time_list],
-            "minute": [t.minute for t in time_list],
-            "second": [t.second for t in time_list],
-            "part_of_day": [part_of_day(t) for t in time_list],
-        },
-    )
-
-
-def make_dim_lookup_table(names: list[str], key_name: str, value_name: str) -> pl.DataFrame:
-    return pl.DataFrame(
-        {
-            key_name: list(range(1, len(names) + 1)),
-            value_name: names,
-        },
-    )
+    return pl.DataFrame(rows), updated_map
 
 
 def validate_cost_columns(df: pl.DataFrame, category: str) -> None:
     tol = 1e-6
 
-    if category == "yellow":
+    if category in ("yellow", "green"):
         base_fare_mismatch = df.select(
             (
                 (pl.col("base_fare") - (pl.col("fare_amount").fill_null(0) + pl.col("extra").fill_null(0))).abs() > tol
             ).sum(),
         ).item()
 
-        tolls_mismatch = df.select(
-            (
+        if category == "yellow":
+            tolls_mismatch = df.select(
                 (
-                    pl.col("tolls_and_fees")
-                    - (
-                        pl.col("tolls_amount").fill_null(0)
-                        + pl.col("congestion_surcharge").fill_null(0)
-                        + pl.col("cbd_congestion_fee").fill_null(0)
-                        + pl.col("Airport_fee").fill_null(0)
-                    )
-                ).abs()
-                > tol
-            ).sum(),
-        ).item()
-
-        taxes_mismatch = df.select(
-            (
+                    (
+                        pl.col("tolls_and_fees")
+                        - (
+                            pl.col("tolls_amount").fill_null(0)
+                            + pl.col("congestion_surcharge").fill_null(0)
+                            + pl.col("cbd_congestion_fee").fill_null(0)
+                            + pl.col("Airport_fee").fill_null(0)
+                        )
+                    ).abs()
+                    > tol
+                ).sum(),
+            ).item()
+        else:
+            tolls_mismatch = df.select(
                 (
-                    pl.col("taxes") - (pl.col("mta_tax").fill_null(0) + pl.col("improvement_surcharge").fill_null(0))
-                ).abs()
-                > tol
-            ).sum(),
-        ).item()
-
-        total_paid_mismatch = df.select(
-            ((pl.col("total_passenger_paid") - pl.col("total_amount")).abs() > tol).sum(),
-        ).item()
-
-        driver_payout_mismatch = df.select(
-            (
-                (
-                    pl.col("driver_payout")
-                    - (
-                        pl.col("fare_amount").fill_null(0)
-                        + pl.col("extra").fill_null(0)
-                        + pl.col("tolls_amount").fill_null(0)
-                        + pl.col("tip_amount").fill_null(0)
-                    )
-                ).abs()
-                > tol
-            ).sum(),
-        ).item()
-
-        tips_rule_mismatch = df.select(
-            (
-                (
-                    (pl.col("payment_type") == "Credit card")
-                    & pl.col("tip_amount").is_not_null()
-                    & ((pl.col("tips") - pl.col("tip_amount")).abs() > tol)
-                )
-                | ((pl.col("payment_type") != "Credit card") & pl.col("tips").is_not_null())
-            ).sum(),
-        ).item()
-
-        append_log_line(
-            VALIDATION_LOG_FILE,
-            (
-                f"costs;category={category};"
-                f"base_fare_mismatch={base_fare_mismatch};"
-                f"tolls_and_fees_mismatch={tolls_mismatch};"
-                f"taxes_mismatch={taxes_mismatch};"
-                f"total_passenger_paid_mismatch={total_paid_mismatch};"
-                f"driver_payout_mismatch={driver_payout_mismatch};"
-                f"tips_rule_mismatch={tips_rule_mismatch}"
-            ),
-        )
-
-        assert base_fare_mismatch == 0, f"{category}: base_fare mismatch rows = {base_fare_mismatch}"
-        assert tolls_mismatch == 0, f"{category}: tolls_and_fees mismatch rows = {tolls_mismatch}"
-        assert taxes_mismatch == 0, f"{category}: taxes mismatch rows = {taxes_mismatch}"
-        assert total_paid_mismatch == 0, f"{category}: total_passenger_paid mismatch rows = {total_paid_mismatch}"
-        assert driver_payout_mismatch == 0, f"{category}: driver_payout mismatch rows = {driver_payout_mismatch}"
-        assert tips_rule_mismatch == 0, f"{category}: tips rule mismatch rows = {tips_rule_mismatch}"
-
-    if category == "green":
-        base_fare_mismatch = df.select(
-            (
-                (pl.col("base_fare") - (pl.col("fare_amount").fill_null(0) + pl.col("extra").fill_null(0))).abs() > tol
-            ).sum(),
-        ).item()
-
-        tolls_mismatch = df.select(
-            (
-                (
-                    pl.col("tolls_and_fees")
-                    - (
-                        pl.col("tolls_amount").fill_null(0)
-                        + pl.col("congestion_surcharge").fill_null(0)
-                        + pl.col("cbd_congestion_fee").fill_null(0)
-                    )
-                ).abs()
-                > tol
-            ).sum(),
-        ).item()
+                    (
+                        pl.col("tolls_and_fees")
+                        - (
+                            pl.col("tolls_amount").fill_null(0)
+                            + pl.col("congestion_surcharge").fill_null(0)
+                            + pl.col("cbd_congestion_fee").fill_null(0)
+                        )
+                    ).abs()
+                    > tol
+                ).sum(),
+            ).item()
 
         taxes_mismatch = df.select(
             (
@@ -595,7 +657,7 @@ def validate_cost_columns(df: pl.DataFrame, category: str) -> None:
         assert driver_payout_mismatch == 0, f"{category}: driver_payout mismatch rows = {driver_payout_mismatch}"
 
 
-def make_fact_batch(  # noqa: PLR0913
+def build_fact_batch(  # noqa: PLR0913
     df: pl.DataFrame,
     category: str,
     dim_zone_map: dict[str, int],
@@ -621,7 +683,7 @@ def make_fact_batch(  # noqa: PLR0913
         pl.col("dropoff_time").dt.second(),
     )
 
-    df = df.with_columns(
+    fact_df = df.with_columns(
         [
             (
                 pl.col("pickup_date").dt.year() * 10000
@@ -664,38 +726,9 @@ def make_fact_batch(  # noqa: PLR0913
         ],
     )
 
-    validate_cost_columns(df, category)
+    validate_cost_columns(fact_df, category)
 
-    return df.select(
-        [
-            "pickup_date_key",
-            "dropoff_date_key",
-            "pickup_time_key",
-            "dropoff_time_key",
-            "pickup_zone_key",
-            "dropoff_zone_key",
-            "vendor_key",
-            "payment_type_key",
-            "category_key",
-            "weather_key",
-            "passenger_count",
-            "trip_distance",
-            "tips",
-            "base_fare",
-            "tolls_and_fees",
-            "taxes",
-            "total_passenger_paid",
-            "driver_payout",
-            "driver_pay",
-            "trip_duration_seconds",
-        ],
-    )
-
-
-def reset_olap_schema() -> None:
-    with olap_pipeline.sql_client() as client:
-        client.execute_sql('DROP SCHEMA IF EXISTS "olap" CASCADE;')
-        client.execute_sql('CREATE SCHEMA "olap";')
+    return fact_df.select(FACT_COLUMNS)
 
 
 def drop_schema(schema_name: str) -> None:
@@ -710,72 +743,132 @@ def main():
     source_schema = detect_latest_raw_schema()
     print(f"Using source schema: {source_schema}")
 
-    dims = build_dimension_maps(source_schema)
-    weather_df, weather_lookup = build_weather_dimension()
+    source_uniques = collect_source_uniques(source_schema)
+    weather_df = build_weather_dimension()
 
-    min_date = dims["min_date"]
-    max_date = dims["max_date"]
-    holiday_set = dims["holiday_set"]
+    existing_zone_df = read_olap_table_df("dim_zone")
+    existing_vendor_df = read_olap_table_df("dim_vendor")
+    existing_payment_df = read_olap_table_df("dim_payment_type")
+    existing_category_df = read_olap_table_df("dim_category")
+    existing_date_df = read_olap_table_df("dim_date")
+    existing_time_df = read_olap_table_df("dim_time")
+    existing_weather_df = read_olap_table_df("dim_weather")
 
-    dim_zone_map = dims["dim_zone_map"]
-    dim_vendor_map = dims["dim_vendor_map"]
-    dim_payment_map = dims["dim_payment_map"]
-    dim_category_map = dims["dim_category_map"]
+    existing_zone_map, _ = build_static_lookup_state(existing_zone_df, "zone_key", "zone_name")
+    existing_vendor_map, _ = build_static_lookup_state(existing_vendor_df, "vendor_key", "vendor_name")
+    existing_payment_map, _ = build_static_lookup_state(existing_payment_df, "payment_type_key", "payment_type_name")
+    existing_category_map, _ = build_static_lookup_state(existing_category_df, "category_key", "category_name")
 
-    dim_date_df = make_dim_date_table(min_date, max_date, holiday_set)
-    dim_time_df = make_dim_time_table(dims["time_list"])
-    dim_zone_df = make_dim_lookup_table(dims["zone_list"], "zone_key", "zone_name")
-    dim_vendor_df = make_dim_lookup_table(dims["vendor_list"], "vendor_key", "vendor_name")
-    dim_payment_df = make_dim_lookup_table(dims["payment_type_list"], "payment_type_key", "payment_type_name")
-    dim_category_df = make_dim_lookup_table(dims["category_list"], "category_key", "category_name")
+    existing_dates = build_date_lookup_state(existing_date_df)
+    existing_times = build_time_lookup_state(existing_time_df)
+    existing_weather_map, _ = build_weather_lookup_state(existing_weather_df)
+
+    dim_zone_df, dim_zone_map = build_incremental_lookup_df(
+        source_uniques["unique_zones"],
+        existing_zone_map,
+        "zone_key",
+        "zone_name",
+    )
+    dim_vendor_df, dim_vendor_map = build_incremental_lookup_df(
+        source_uniques["unique_vendors"],
+        existing_vendor_map,
+        "vendor_key",
+        "vendor_name",
+    )
+    dim_payment_df, dim_payment_map = build_incremental_lookup_df(
+        source_uniques["unique_payment_types"],
+        existing_payment_map,
+        "payment_type_key",
+        "payment_type_name",
+    )
+    dim_category_df, dim_category_map = build_incremental_lookup_df(
+        source_uniques["unique_categories"],
+        existing_category_map,
+        "category_key",
+        "category_name",
+    )
+
+    dim_date_df = build_dim_date_rows(
+        source_uniques["min_date"],
+        source_uniques["max_date"],
+        existing_dates,
+        source_uniques["holiday_set"],
+    )
+    dim_time_df = build_dim_time_rows(
+        sorted(source_uniques["unique_times"], key=lambda t: (t.hour, t.minute, t.second)),
+        existing_times,
+    )
+    dim_weather_df, weather_lookup = build_incremental_weather_rows(
+        weather_df,
+        existing_weather_map,
+    )
 
     append_log_line(
         SUMMARY_LOG_FILE,
         (
             f"{source_schema};"
-            f"min_date={min_date};max_date={max_date};"
-            f"dim_date_rows={dim_date_df.height};"
-            f"dim_time_rows={dim_time_df.height};"
-            f"dim_zone_rows={dim_zone_df.height};"
-            f"dim_vendor_rows={dim_vendor_df.height};"
-            f"dim_payment_rows={dim_payment_df.height};"
-            f"dim_category_rows={dim_category_df.height};"
-            f"dim_weather_rows={weather_df.height}"
+            f"min_date={source_uniques['min_date']};max_date={source_uniques['max_date']};"
+            f"new_dim_date_rows={dim_date_df.height};"
+            f"new_dim_time_rows={dim_time_df.height};"
+            f"new_dim_zone_rows={dim_zone_df.height};"
+            f"new_dim_vendor_rows={dim_vendor_df.height};"
+            f"new_dim_payment_rows={dim_payment_df.height};"
+            f"new_dim_category_rows={dim_category_df.height};"
+            f"new_dim_weather_rows={dim_weather_df.height}"
         ),
     )
 
-    @dlt.resource(name="dim_date", write_disposition="replace")
+    @dlt.resource(name="dim_date", write_disposition="append")
     def dim_date():
+        if dim_date_df.is_empty():
+            return
         yield dim_date_df.to_arrow()
 
-    @dlt.resource(name="dim_time", write_disposition="replace")
+    @dlt.resource(name="dim_time", write_disposition="append")
     def dim_time():
+        if dim_time_df.is_empty():
+            return
         yield dim_time_df.to_arrow()
 
-    @dlt.resource(name="dim_zone", write_disposition="replace")
+    @dlt.resource(name="dim_zone", write_disposition="append")
     def dim_zone():
+        if dim_zone_df.is_empty():
+            return
         yield dim_zone_df.to_arrow()
 
-    @dlt.resource(name="dim_vendor", write_disposition="replace")
+    @dlt.resource(name="dim_vendor", write_disposition="append")
     def dim_vendor():
+        if dim_vendor_df.is_empty():
+            return
         yield dim_vendor_df.to_arrow()
 
-    @dlt.resource(name="dim_payment_type", write_disposition="replace")
+    @dlt.resource(name="dim_payment_type", write_disposition="append")
     def dim_payment_type():
+        if dim_payment_df.is_empty():
+            return
         yield dim_payment_df.to_arrow()
 
-    @dlt.resource(name="dim_category", write_disposition="replace")
+    @dlt.resource(name="dim_category", write_disposition="append")
     def dim_category():
+        if dim_category_df.is_empty():
+            return
         yield dim_category_df.to_arrow()
 
-    @dlt.resource(name="dim_weather", write_disposition="replace")
+    @dlt.resource(name="dim_weather", write_disposition="append")
     def dim_weather():
-        yield weather_df.to_arrow()
+        if dim_weather_df.is_empty():
+            return
+        yield dim_weather_df.to_arrow()
 
-    @dlt.resource(name="fact_trip", write_disposition="replace")
+    @dlt.resource(
+        name="fact_trip",
+        write_disposition="merge",
+        primary_key=FACT_PRIMARY_KEY,
+    )
     def fact_trip():
         total_source_rows = 0
         total_after_required_filter = 0
+        total_fact_rows = 0
 
         for source_df in iter_source_frames(source_schema):
             if source_df.is_empty():
@@ -783,91 +876,141 @@ def main():
 
             total_source_rows += source_df.height
 
-            category = str(source_df.get_column("category")[0])
-
-            batch = source_df.filter(
-                pl.col("pickup_date").is_not_null()
-                & pl.col("dropoff_date").is_not_null()
-                & pl.col("pickup_time").is_not_null()
-                & pl.col("dropoff_time").is_not_null(),
+            categories = sorted(
+                {str(v) for v in source_df.get_column("category").drop_nulls().to_list() if v is not None},
             )
 
-            removed_due_to_missing_datetime = source_df.height - batch.height
-            total_after_required_filter += batch.height
+            for category in categories:
+                category_batch = source_df.filter(pl.col("category") == category)
 
-            append_log_line(
-                VALIDATION_LOG_FILE,
-                (
-                    f"{source_schema};batch_rows={source_df.height};"
-                    f"removed_missing_datetime={removed_due_to_missing_datetime};"
-                    f"kept_after_datetime_filter={batch.height}"
-                ),
-            )
+                if category_batch.is_empty():
+                    continue
 
-            assert removed_due_to_missing_datetime == 0, (
-                f"{source_schema}: removed rows due to missing date/time in fact stage = "
-                f"{removed_due_to_missing_datetime}"
-            )
+                selected_columns = [
+                    "pickup_date",
+                    "dropoff_date",
+                    "pickup_time",
+                    "dropoff_time",
+                    "pickup_zone",
+                    "dropoff_zone",
+                    "vendor",
+                    "payment_type",
+                    "category",
+                    "passenger_count",
+                    "trip_distance",
+                    "tips",
+                    "base_fare",
+                    "tolls_and_fees",
+                    "taxes",
+                    "total_passenger_paid",
+                    "driver_payout",
+                    "driver_pay",
+                    "fare_amount",
+                    "extra",
+                    "tolls_amount",
+                    "tip_amount",
+                    "mta_tax",
+                    "improvement_surcharge",
+                    "congestion_surcharge",
+                    "cbd_congestion_fee",
+                    "Airport_fee",
+                    "base_passenger_fare",
+                    "tolls",
+                    "sales_tax",
+                    "bcf",
+                    "airport_fee",
+                ]
 
-            if batch.is_empty():
-                continue
+                batch = category_batch.select([c for c in selected_columns if c in category_batch.columns])
 
-            fact_df = make_fact_batch(
-                batch,
-                category=category,
-                dim_zone_map=dim_zone_map,
-                dim_vendor_map=dim_vendor_map,
-                dim_payment_map=dim_payment_map,
-                dim_category_map=dim_category_map,
-                weather_lookup=weather_lookup,
-            )
+                required_before = batch.height
 
-            mandatory_columns = [
-                "pickup_date_key",
-                "dropoff_date_key",
-                "pickup_time_key",
-                "dropoff_time_key",
-                "pickup_zone_key",
-                "dropoff_zone_key",
-                "vendor_key",
-                "payment_type_key",
-                "category_key",
-                "trip_duration_seconds",
-            ]
-            null_checks = {
-                col: fact_df.select(pl.col(col).is_null().sum()).item()
-                for col in mandatory_columns
-                if col in fact_df.columns
-            }
+                batch = batch.filter(
+                    pl.col("pickup_date").is_not_null()
+                    & pl.col("dropoff_date").is_not_null()
+                    & pl.col("pickup_time").is_not_null()
+                    & pl.col("dropoff_time").is_not_null(),
+                )
 
-            append_log_line(
-                VALIDATION_LOG_FILE,
-                f"{source_schema};fact_null_checks={null_checks}",
-            )
+                removed_due_to_missing_datetime = required_before - batch.height
+                total_after_required_filter += batch.height
 
-            for col_name, null_count in null_checks.items():
-                assert null_count == 0, f"{source_schema}: nulls in mandatory fact column {col_name} = {null_count}"
+                append_log_line(
+                    VALIDATION_LOG_FILE,
+                    (
+                        f"{source_schema};category={category};batch_rows={required_before};"
+                        f"removed_missing_datetime={removed_due_to_missing_datetime};"
+                        f"kept_after_datetime_filter={batch.height}"
+                    ),
+                )
 
-            negative_duration_rows = fact_df.select((pl.col("trip_duration_seconds") < 0).sum()).item()
-            append_log_line(
-                VALIDATION_LOG_FILE,
-                f"{source_schema};negative_trip_duration_rows={negative_duration_rows}",
-            )
-            assert negative_duration_rows == 0, (
-                f"{source_schema}: negative trip duration rows = {negative_duration_rows}"
-            )
+                assert removed_due_to_missing_datetime == 0, (
+                    f"{source_schema}: removed rows due to missing date/time in fact stage = "
+                    f"{removed_due_to_missing_datetime}"
+                )
 
-            assert fact_df.height == batch.height, (
-                f"{source_schema}: fact row count changed after reshape ({fact_df.height} != {batch.height})"
-            )
+                if batch.is_empty():
+                    continue
 
-            yield fact_df.to_arrow()
+                fact_df = build_fact_batch(
+                    batch,
+                    category=category,
+                    dim_zone_map=dim_zone_map,
+                    dim_vendor_map=dim_vendor_map,
+                    dim_payment_map=dim_payment_map,
+                    dim_category_map=dim_category_map,
+                    weather_lookup=weather_lookup,
+                )
+
+                mandatory_columns = [
+                    "pickup_date_key",
+                    "dropoff_date_key",
+                    "pickup_time_key",
+                    "dropoff_time_key",
+                    "pickup_zone_key",
+                    "dropoff_zone_key",
+                    "vendor_key",
+                    "payment_type_key",
+                    "category_key",
+                    "trip_duration_seconds",
+                ]
+                null_checks = {
+                    col: fact_df.select(pl.col(col).is_null().sum()).item()
+                    for col in mandatory_columns
+                    if col in fact_df.columns
+                }
+
+                append_log_line(
+                    VALIDATION_LOG_FILE,
+                    f"{source_schema};category={category};fact_null_checks={null_checks}",
+                )
+
+                for col_name, null_count in null_checks.items():
+                    assert null_count == 0, f"{source_schema}: nulls in mandatory fact column {col_name} = {null_count}"
+
+                negative_duration_rows = fact_df.select((pl.col("trip_duration_seconds") < 0).sum()).item()
+                append_log_line(
+                    VALIDATION_LOG_FILE,
+                    f"{source_schema};category={category};negative_trip_duration_rows={negative_duration_rows}",
+                )
+                assert negative_duration_rows == 0, (
+                    f"{source_schema}: negative trip duration rows = {negative_duration_rows}"
+                )
+
+                assert fact_df.height == batch.height, (
+                    f"{source_schema}: fact row count changed after reshape ({fact_df.height} != {batch.height})"
+                )
+
+                total_fact_rows += fact_df.height
+
+                yield fact_df.to_arrow()
 
         append_log_line(
             SUMMARY_LOG_FILE,
             (
                 f"{source_schema};fact_source_rows={total_source_rows};"
-                f"fact_rows_after_datetime_filter={total_after_required_filter}"
+                f"fact_rows_after_datetime_filter={total_after_required_filter};"
+                f"fact_rows_written={total_fact_rows}"
             ),
         )
 
@@ -888,8 +1031,7 @@ def main():
         ],
     )
 
-    drop_schema(source_schema)  # remove raw_<number> big table
-
+    drop_schema(source_schema)
     print(load_info)
 
 

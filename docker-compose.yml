@@ -12,5 +12,19 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    user: root
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "PassworD123123"
+      MSSQL_PID: "Developer"
+    ports:
+      - "${MSSQL_PORT}:1433"
+    volumes:
+      - mssqldata:/var/opt/mssql
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  mssqldata:
